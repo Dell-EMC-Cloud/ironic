@@ -795,7 +795,7 @@ class AgentOobStepsMixin(object):
         """
         try:
             with manager_utils.power_state_for_network_configuration(task):
-                task.driver.network.remove_provisioning_network(task)
+                # task.driver.network.remove_provisioning_network(task)
                 task.driver.network.configure_tenant_networks(task)
         except Exception as e:
             msg = (_('Error changing node %(node)s to tenant networks after '

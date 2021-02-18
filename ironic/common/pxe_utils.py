@@ -104,7 +104,15 @@ def _link_mac_pxe_configs(task, ipxe_enabled=False):
             pxe_config_file_path, os.path.dirname(mac_path))
         utils.create_link_without_raise(relative_source_path, mac_path)
 
+    def create_ipa_params_link(mac_path):
+        ironic_utils.unlink_without_raise(mac_path)
+        relative_source_path = os.path.relpath(
+            ipa_params_file_path, os.path.dirname(mac_path))
+        utils.create_link_without_raise(relative_source_path, mac_path)
+
     pxe_config_file_path = get_pxe_config_file_path(
+        task.node.uuid, ipxe_enabled=ipxe_enabled)
+    ipa_params_file_path = get_ipa_params_file_path(
         task.node.uuid, ipxe_enabled=ipxe_enabled)
     for port in task.ports:
         client_id = port.extra.get('client-id')
@@ -113,6 +121,8 @@ def _link_mac_pxe_configs(task, ipxe_enabled=False):
                                       ipxe_enabled=ipxe_enabled))
         # Grub2 MAC address only
         create_link(_get_pxe_grub_mac_path(port.address,
+                                           ipxe_enabled=ipxe_enabled))
+        create_ipa_params_link(_get_pxe_grub_mac_ipa_params_path(port.address,
                                            ipxe_enabled=ipxe_enabled))
 
 
@@ -157,6 +167,11 @@ def _link_ip_address_pxe_configs(task, ipxe_enabled=False):
 def _get_pxe_grub_mac_path(mac, ipxe_enabled=False):
     root_dir = get_ipxe_root_dir() if ipxe_enabled else get_root_dir()
     return os.path.join(root_dir, mac + '.conf')
+
+
+def _get_pxe_grub_mac_ipa_params_path(mac, ipxe_enabled=False):
+    root_dir = get_ipxe_root_dir() if ipxe_enabled else get_root_dir()
+    return os.path.join(root_dir, mac + '.ipa-params')
 
 
 def _get_pxe_mac_path(mac, delimiter='-', client_id=None,
@@ -229,6 +244,21 @@ def get_kernel_ramdisk_info(node_uuid, driver_info, mode='deploy',
     return image_info
 
 
+def get_ipa_params_file_path(node_uuid, ipxe_enabled=False):
+    """Generate the path for the node's PXE configuration file.
+
+    :param node_uuid: the UUID of the node.
+    :param ipxe_enabled: A default False boolean value to tell the method
+                         if the caller is using iPXE.
+    :returns: The path to the node's PXE configuration file.
+
+    """
+    if ipxe_enabled:
+        return os.path.join(get_ipxe_root_dir(), node_uuid, 'ipa-params')
+    else:
+        return os.path.join(get_root_dir(), node_uuid, 'ipa-params')
+
+
 def get_pxe_config_file_path(node_uuid, ipxe_enabled=False):
     """Generate the path for the node's PXE configuration file.
 
@@ -299,6 +329,11 @@ def create_pxe_config(task, pxe_options, template=None, ipxe_enabled=False):
     pxe_config = utils.render_template(template, params)
     utils.write_to_file(pxe_config_file_path, pxe_config)
 
+    ipa_params_file_path = get_ipa_params_file_path(
+        task.node.uuid,
+        ipxe_enabled=ipxe_enabled)
+    utils.write_to_file(ipa_params_file_path, pxe_options['pxe_append_params'])
+
     # Always write the mac addresses
     _link_mac_pxe_configs(task, ipxe_enabled=ipxe_enabled)
     if uefi_with_grub:
@@ -366,6 +401,8 @@ def clean_up_pxe_config(task, ipxe_enabled=False):
         # Grub2 MAC address based confiuration
         ironic_utils.unlink_without_raise(
             _get_pxe_grub_mac_path(port.address, ipxe_enabled=ipxe_enabled))
+        ironic_utils.unlink_without_raise(_get_pxe_grub_mac_ipa_params_path(port.address,
+                                           ipxe_enabled=ipxe_enabled))
     if ipxe_enabled:
         utils.rmtree_without_raise(os.path.join(get_ipxe_root_dir(),
                                                 task.node.uuid))
