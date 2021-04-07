@@ -449,6 +449,7 @@ class RedfishVirtualMediaBoot(base.BootInterface):
                                         states.INSPECTING):
             return
 
+        """
         # NOTE(TheJulia): Since we're deploying, cleaning, or rescuing,
         # with virtual media boot, we should generate a token!
         manager_utils.add_secret_token(node, pregenerated=True)
@@ -509,6 +510,12 @@ class RedfishVirtualMediaBoot(base.BootInterface):
         LOG.debug("Node %(node)s is set to one time boot from "
                   "%(device)s", {'node': task.node.uuid,
                                  'device': boot_devices.CDROM})
+        """
+        node.save()
+        manager_utils.node_power_action(task, states.POWER_OFF)
+        managers = redfish_utils.get_system(task.node).managers
+        d_info = _parse_driver_info(node)
+        _insert_vmedia(task, managers, d_info.get('deploy_ramdisk'), sushy.VIRTUAL_MEDIA_FLOPPY)
 
     def clean_up_ramdisk(self, task):
         """Cleans up the boot of ironic ramdisk.
@@ -518,7 +525,6 @@ class RedfishVirtualMediaBoot(base.BootInterface):
 
         :param task: A task from TaskManager.
         :returns: None
-        """
         d_info = _parse_driver_info(task.node)
 
         config_via_floppy = d_info.get('config_via_floppy')
@@ -536,6 +542,10 @@ class RedfishVirtualMediaBoot(base.BootInterface):
             _eject_vmedia(task, managers, sushy.VIRTUAL_MEDIA_FLOPPY)
 
             image_utils.cleanup_floppy_image(task)
+        """
+        d_info = _parse_driver_info(task.node)
+        managers = redfish_utils.get_system(task.node).managers
+        _eject_vmedia(task, managers, sushy.VIRTUAL_MEDIA_FLOPPY)
 
     def prepare_instance(self, task):
         """Prepares the boot of instance over virtual media.

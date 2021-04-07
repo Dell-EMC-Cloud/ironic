@@ -15,6 +15,8 @@
 #    under the License.
 
 import os
+import shutil
+import tempfile
 
 from ironic_lib import utils as ironic_utils
 from oslo_log import log as logging
@@ -445,6 +447,141 @@ def _dhcp_option_file_or_url(task, urlboot=False, ip_version=None):
                                                   boot_file=boot_file)
 
 
+def _powerscale_boot_file(task):
+    root_dir = get_root_dir()
+    return "%s/%s/boot/loader.efi" % (root_dir, task.node.uuid)
+
+
+def _powerscale_boot_root_dir(task):
+    root_dir = get_root_dir()
+    return "%s/%s" % (root_dir, task.node.uuid)
+
+
+def _powerscale_mnt_dir(task):
+    root_dir = get_root_dir()
+    return "%s/%s-cdrom" % (root_dir, task.node.uuid)
+
+
+def cache_ramdisk_powerscale(task, pxe_info, ipxe_enabled=False):
+    """Fetch the necessary kernels and ramdisks for the instance."""
+    cache_ramdisk_kernel(task, pxe_info, ipxe_enabled)
+
+    ctx = task.context
+    node = task.node
+    if ipxe_enabled:
+        path = os.path.join(get_ipxe_root_dir(), node.uuid)
+    else:
+        path = os.path.join(get_root_dir(), node.uuid)
+
+    boot_root_dir = _powerscale_boot_root_dir(task)
+    fileutils.ensure_tree(boot_root_dir)
+
+    mnt_dir = _powerscale_mnt_dir(task)
+    fileutils.ensure_tree(mnt_dir)
+
+    utils.mount("%s/deploy_ramdisk" % (path), mnt_dir, '-o', 'loop')
+    shutil.copytree(mnt_dir, boot_root_dir, dirs_exist_ok=True)
+    utils.umount(mnt_dir)
+    shutil.rmtree(mnt_dir)
+
+    _create_export(boot_root_dir)
+
+
+def clean_up_pxe_config_powerscale(task, ipxe_enabled=False):
+    """Clean up the TFTP environment for the task's node.
+
+    :param task: A TaskManager instance.
+
+    """
+    LOG.debug("Cleaning up PXE config for PowerScale node %s", task.node.uuid)
+
+    clean_up_pxe_config(task, ipxe_enabled)
+    boot_root_dir = _powerscale_boot_root_dir(task)
+    shutil.rmtree(boot_root_dir)
+    _remove_export(task.node.uuid)
+
+
+def clean_up_pxe_env_powerscale(task, images_info, ipxe_enabled=False):
+    """Cleanup PXE environment of all the images in images_info.
+
+    Cleans up the PXE environment for the mentioned images in
+    images_info.
+
+    :param task: a TaskManager object
+    :param images_info: A dictionary of images whose keys are the image names
+        to be cleaned up (kernel, ramdisk, etc) and values are a tuple of
+        identifier and absolute path.
+    """
+    clean_up_pxe_env(task, images_info, ipxe_enabled)
+    boot_root_dir = _powerscale_boot_root_dir(task)
+    shutil.rmtree(boot_root_dir)
+    _remove_export(task.node.uuid)
+
+
+def _create_export(dir):
+    with tempfile.NamedTemporaryFile('w+') as fp:
+        fp.write("$a %s *(rw,no_root_squash,no_subtree_check,insecure)" % (dir))
+        fp.seek(0)
+        utils.execute(
+                'sed', '-i',
+                '-f', fp.name,
+                '/etc/exports', run_as_root=True)
+        utils.execute("exportfs", "-ra", run_as_root=True)
+
+
+def _remove_export(node_uuid):
+    utils.execute(
+            'sed', '-i',
+            "/%s/d" % (node_uuid),
+            '/etc/exports', run_as_root=True)
+    utils.execute("exportfs", "-ra", run_as_root=True)
+
+
+
+def dhcp_options_for_powerscale(task):
+    """Retrieves the DHCP PXE boot options.
+
+    :param task: A TaskManager instance.
+    :param ipxe_enabled: Default false boolean that signals if iPXE
+                         formatting should be returned by the method
+                         for DHCP server configuration.
+    :param url_boot: Default false boolean to inform the method if
+                     a URL should be returned to boot the node.
+                     If [pxe]ip_version is set to `6`, then this option
+                     has no effect as url_boot form is required by DHCPv6
+                     standards.
+    :param ip_version: The IP version of options to return as values
+                       differ by IP version. Default to [pxe]ip_version.
+                       Possible options are integers 4 or 6.
+    :returns: Dictionary to be sent to the networking service describing
+              the DHCP options to be set.
+    """
+
+    dhcp_opts = []
+    dhcp_provider_name = CONF.dhcp.dhcp_provider
+    boot_file_param = DHCP_BOOTFILE_NAME
+    boot_file = _powerscale_boot_file(task)
+
+    dhcp_opts.append(
+        {'opt_name': "tag:!ipxe,%s" % boot_file_param,
+         'opt_value': boot_file}
+    )
+
+    dhcp_opts.append({'opt_name': DHCP_TFTP_SERVER_NAME,
+                      'opt_value': CONF.pxe.tftp_server})
+    dhcp_opts.append({'opt_name': DHCP_TFTP_SERVER_ADDRESS,
+                      'opt_value': CONF.pxe.tftp_server})
+    dhcp_opts.append({'opt_name': 'server-ip-address',
+                      'opt_value': CONF.pxe.tftp_server})
+
+    dhcp_opts.append({'opt_name': '17',
+                      'opt_value': _powerscale_boot_root_dir(task)})
+    for opt in dhcp_opts:
+        opt.update({'ip_version': 4})
+
+    return dhcp_opts
+
+
 def dhcp_options_for_instance(task, ipxe_enabled=False, url_boot=False,
                               ip_version=None):
     """Retrieves the DHCP PXE boot options.
@@ -512,6 +649,9 @@ def dhcp_options_for_instance(task, ipxe_enabled=False, url_boot=False,
                 dhcp_opts.append(
                     {'opt_name': "tag:ipxe,%s" % boot_file_param,
                      'opt_value': ipxe_script_url}
+                # For HTTP boot
+                #    {'opt_name': "%s" % boot_file_param,
+                #     'opt_value': "http://10.243.86.202:/static/pic-mfsbsd.iso"}
                 )
             else:
                 dhcp_opts.append(
@@ -569,6 +709,12 @@ def dhcp_options_for_instance(task, ipxe_enabled=False, url_boot=False,
     if not url_boot:
         dhcp_opts.append({'opt_name': 'server-ip-address',
                           'opt_value': CONF.pxe.tftp_server})
+
+    dhcp_opts.append({'opt_name': '17',
+                      'opt_value': '10.243.86.202:/opt/stack/data/ironic/tftpboot/install'})
+    # For HTTP boot
+    # dhcp_opts.append({'opt_name': '60',
+    #                   'opt_value': 'HTTPClient'})
 
     # Append the IP version for all the configuration options
     for opt in dhcp_opts:

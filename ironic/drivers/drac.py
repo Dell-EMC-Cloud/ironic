@@ -27,6 +27,7 @@ from ironic.drivers.modules.drac import raid
 from ironic.drivers.modules.drac import vendor_passthru
 from ironic.drivers.modules import ipxe
 from ironic.drivers.modules import noop
+from ironic.drivers.modules import powerscale_pxe
 from ironic.drivers.modules import pxe
 
 
@@ -41,7 +42,10 @@ class IDRACHardware(generic.GenericHardware):
     @property
     def supported_boot_interfaces(self):
         """List of supported boot interfaces."""
-        return [ipxe.iPXEBoot, pxe.PXEBoot, boot.DracRedfishVirtualMediaBoot]
+        return [ipxe.iPXEBoot,
+                pxe.PXEBoot,
+                boot.DracRedfishVirtualMediaBoot,
+                powerscale_pxe.PowerScaleBoot]
 
     @property
     def supported_management_interfaces(self):
